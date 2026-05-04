@@ -985,7 +985,9 @@ pytest --cov=ticktick_sdk --cov-report=term-missing
 
 ### "V2 initialization failed"
 - Your password may contain special characters - try changing it
-- Check for 2FA/MFA (not currently supported)
+- For accounts with 2FA/MFA enabled, use `ticktick-sdk auth-v2` to capture a
+  session token once and set `TICKTICK_V2_SESSION_FILE` instead of
+  `TICKTICK_PASSWORD` (see [docs/2FA_SUPPORT.md](docs/2FA_SUPPORT.md))
 
 ### "Rate limit exceeded"
 - Wait 30-60 seconds before retrying

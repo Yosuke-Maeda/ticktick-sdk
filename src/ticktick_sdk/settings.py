@@ -104,6 +104,10 @@ class TickTickSettings(BaseSettings):
         default=SecretStr(""),
         description="TickTick account password",
     )
+    v2_session_file: str | None = Field(
+        default=None,
+        description="Path to a pre-obtained V2 session JSON file (for 2FA accounts)",
+    )
 
     # =========================================================================
     # General Settings
@@ -154,11 +158,19 @@ class TickTickSettings(BaseSettings):
 
     @property
     def has_v2_credentials(self) -> bool:
-        """Check if V2 session credentials are configured."""
+        """Check if V2 session credentials are configured.
+
+        Either username+password OR a pre-obtained session file is sufficient.
+        """
         return bool(
-            self.username
-            and self.password.get_secret_value()
+            (self.username and self.password.get_secret_value())
+            or self.v2_session_file
         )
+
+    @property
+    def has_v2_session_file(self) -> bool:
+        """Check if a pre-obtained V2 session file path is configured."""
+        return bool(self.v2_session_file)
 
     @property
     def is_fully_configured(self) -> bool:
@@ -181,11 +193,10 @@ class TickTickSettings(BaseSettings):
     def validate_v2_ready(self) -> None:
         """Validate V2 API is ready for use. Raises if not configured."""
         if not self.has_v2_credentials:
-            missing = []
-            if not self.username:
-                missing.append("TICKTICK_USERNAME")
-            if not self.password.get_secret_value():
-                missing.append("TICKTICK_PASSWORD")
+            missing = [
+                "TICKTICK_USERNAME + TICKTICK_PASSWORD",
+                "or TICKTICK_V2_SESSION_FILE (alternative for 2FA accounts)",
+            ]
             raise TickTickConfigurationError(
                 "V2 session credentials not configured",
                 missing_config=missing,
@@ -205,10 +216,10 @@ class TickTickSettings(BaseSettings):
 
         if not self.has_v2_credentials:
             errors.append("V2 session credentials incomplete")
-            if not self.username:
-                missing.append("TICKTICK_USERNAME")
-            if not self.password.get_secret_value():
-                missing.append("TICKTICK_PASSWORD")
+            missing.append(
+                "TICKTICK_USERNAME + TICKTICK_PASSWORD"
+                " or TICKTICK_V2_SESSION_FILE (for 2FA accounts)"
+            )
 
         if errors:
             raise TickTickConfigurationError(

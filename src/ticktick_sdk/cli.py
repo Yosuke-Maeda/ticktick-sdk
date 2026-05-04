@@ -255,6 +255,26 @@ def run_auth(manual: bool = False) -> int:
     return auth_main(manual=manual)
 
 
+def run_auth_v2(output: str | None = None) -> int:
+    """
+    Run the V2 session acquisition flow (with 2FA support).
+
+    Signs on with TICKTICK_USERNAME/PASSWORD, prompts interactively for a TOTP
+    code if the account has 2FA enabled, and writes the resulting session to a
+    JSON file consumable by `TICKTICK_V2_SESSION_FILE`.
+
+    Args:
+        output: Path to the session JSON file
+                (defaults to ~/.ticktick/session.json).
+
+    Returns:
+        Exit code (0 for success, 1 for error).
+    """
+    from ticktick_sdk.auth_v2_cli import main as auth_v2_main
+
+    return auth_v2_main(output=output)
+
+
 def create_parser() -> argparse.ArgumentParser:
     """
     Create and configure the argument parser.
@@ -394,6 +414,42 @@ After obtaining the token, add it to your .env file:
         help="Manual mode: prints URL for you to visit (SSH-friendly)",
     )
 
+    # auth-v2 subcommand
+    auth_v2_parser = subparsers.add_parser(
+        "auth-v2",
+        help="Acquire and persist a V2 session (supports 2FA)",
+        description="""\
+Acquire a V2 (session-based) authentication artifact for TickTick.
+
+This is required for accounts with 2FA/MFA enabled, since the MCP server
+cannot prompt for a TOTP code at startup. Run this once to obtain the
+session, then point TICKTICK_V2_SESSION_FILE at the resulting JSON file.
+
+Before running, ensure these environment variables are set (or in .env):
+  - TICKTICK_USERNAME
+  - TICKTICK_PASSWORD
+
+The session file contains a long-lived bearer token plus cookies and is
+written with mode 600. Treat it like a password and keep it out of any
+cloud-synced folders.
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+  ticktick-sdk auth-v2
+  ticktick-sdk auth-v2 --output ~/.ticktick/work.json
+""",
+    )
+
+    auth_v2_parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Where to save the session JSON (default: ~/.ticktick/session.json)",
+    )
+
     return parser
 
 
@@ -424,6 +480,8 @@ def main() -> int | NoReturn:
         )
     elif args.command == "auth":
         return run_auth(manual=args.manual)
+    elif args.command == "auth-v2":
+        return run_auth_v2(output=args.output)
     else:
         # This shouldn't happen with argparse, but handle it gracefully
         parser.print_help()

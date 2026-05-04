@@ -10,13 +10,16 @@ and converts between unified models and API-specific formats.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from types import TracebackType
 from typing import Any, TypeVar
 
 from ticktick_sdk.api.v1 import TickTickV1Client
 from ticktick_sdk.api.v2 import TickTickV2Client
+from ticktick_sdk.api.v2.auth import SessionToken
 from ticktick_sdk.constants import TaskStatus
 from ticktick_sdk.exceptions import (
     TickTickAPIError,
@@ -238,6 +241,7 @@ class UnifiedTickTickAPI:
         # V2 Session credentials
         username: str | None = None,
         password: str | None = None,
+        v2_session_file: str | None = None,
         # General
         timeout: float = 30.0,
         device_id: str | None = None,
@@ -253,6 +257,7 @@ class UnifiedTickTickAPI:
         self._v2_credentials = {
             "username": username,
             "password": password,
+            "session_file": v2_session_file,
             "device_id": device_id,
             "timeout": timeout,
         }
@@ -298,22 +303,59 @@ class UnifiedTickTickAPI:
             logger.error("Failed to initialize V1 client: %s", e)
 
         # Initialize V2 client
+        session_file = self._v2_credentials.get("session_file")
         try:
-            self._v2_client = TickTickV2Client(
-                device_id=self._v2_credentials["device_id"],
-                timeout=self._v2_credentials["timeout"],
-            )
+            if session_file:
+                # Load a pre-obtained session from disk (preferred for 2FA accounts).
+                # The file is produced by `ticktick-sdk auth-v2` and contains the
+                # serialized SessionToken plus a `_meta.device_id` entry so the same
+                # device id used during sign-on is reused on every load (TickTick
+                # may reject sessions presented from a different device id).
+                try:
+                    raw = json.loads(Path(session_file).read_text())
+                except (OSError, json.JSONDecodeError) as e:
+                    raise TickTickConfigurationError(
+                        f"Failed to read V2 session file {session_file}: {e}"
+                    ) from e
 
-            # Authenticate V2 if credentials provided
-            if self._v2_credentials["username"] and self._v2_credentials["password"]:
-                session = await self._v2_client.authenticate(
-                    self._v2_credentials["username"],
-                    self._v2_credentials["password"],
+                meta = raw.pop("_meta", {}) if isinstance(raw, dict) else {}
+                device_id = meta.get("device_id") or self._v2_credentials["device_id"]
+                session = SessionToken.from_dict(raw)
+
+                self._v2_client = TickTickV2Client(
+                    device_id=device_id,
+                    timeout=self._v2_credentials["timeout"],
                 )
+                self._v2_client.set_session(session)
                 self._inbox_id = session.inbox_id
-                logger.info("V2 client authenticated")
+
+                if (
+                    self._v2_credentials["username"]
+                    and self._v2_credentials["password"]
+                ):
+                    logger.warning(
+                        "Both V2 password and session_file are set; using session_file"
+                    )
+                logger.info("V2 client loaded session from %s", session_file)
             else:
-                errors.append("V2 credentials not provided")
+                self._v2_client = TickTickV2Client(
+                    device_id=self._v2_credentials["device_id"],
+                    timeout=self._v2_credentials["timeout"],
+                )
+
+                # Authenticate V2 if credentials provided
+                if (
+                    self._v2_credentials["username"]
+                    and self._v2_credentials["password"]
+                ):
+                    session = await self._v2_client.authenticate(
+                        self._v2_credentials["username"],
+                        self._v2_credentials["password"],
+                    )
+                    self._inbox_id = session.inbox_id
+                    logger.info("V2 client authenticated")
+                else:
+                    errors.append("V2 credentials not provided")
         except Exception as e:
             errors.append(f"V2 initialization failed: {e}")
             logger.error("Failed to initialize V2 client: %s", e)
@@ -329,7 +371,13 @@ class UnifiedTickTickAPI:
         if not verification.get("v1"):
             errors.append("V1 authentication verification failed")
         if not verification.get("v2"):
-            errors.append("V2 authentication verification failed")
+            if session_file:
+                errors.append(
+                    f"V2 session at {session_file} is invalid or expired; "
+                    "run `ticktick-sdk auth-v2` to refresh it"
+                )
+            else:
+                errors.append("V2 authentication verification failed")
 
         # Check if we have both APIs
         if not self._router.is_fully_configured:
